@@ -30,7 +30,7 @@ uint8_t ui8_gear_ratio = GEAR_RATIO;
 
 volatile struc_lcd_configuration_variables lcd_configuration_variables;
 
-UART_HandleTypeDef huart1;
+extern UART_HandleTypeDef huart1;
 void check_recent(void);
 
 void kunteng_init()

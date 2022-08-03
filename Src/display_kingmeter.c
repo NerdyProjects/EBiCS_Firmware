@@ -34,7 +34,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define RXSTATE_MSGBODY     2
 #define RXSTATE_DONE        3
 
-UART_HandleTypeDef huart1;
+extern UART_HandleTypeDef huart1;
 
 #if (DISPLAY_TYPE == DISPLAY_TYPE_KINGMETER_618U)
  const uint16_t KM_WHEELSIZE[8] = { KM_WHEELSIZE_16, KM_WHEELSIZE_18, KM_WHEELSIZE_20,  KM_WHEELSIZE_22,
