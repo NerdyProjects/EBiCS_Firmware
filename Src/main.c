@@ -1055,6 +1055,10 @@ int main(void)
 
 }
 
+#define RCC_PLLON_BIT_NUMBER      RCC_CR_PLLON_Pos
+#define RCC_CR_PLLON_BB           ((uint32_t)(PERIPH_BB_BASE + (RCC_CR_OFFSET_BB * 32U) + (RCC_PLLON_BIT_NUMBER * 4U)))
+#define __RCC_PLL_ENABLE()          (*(__IO uint32_t *) RCC_CR_PLLON_BB = ENABLE)
+
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -1062,47 +1066,30 @@ int main(void)
 void SystemClock_Config(void)
 {
 
-  RCC_OscInitTypeDef RCC_OscInitStruct;
-  RCC_ClkInitTypeDef RCC_ClkInitStruct;
-  RCC_PeriphCLKInitTypeDef PeriphClkInit;
-
-    /**Initializes the CPU, AHB and APB busses clocks 
-    */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = 16;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI_DIV2;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL16;
-  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
+  /** System starts up on HSI with PLL disabled.
+	 * switch to HSI, PLL *16 / 2 = 64 MHz (max. for the STM32F103 with HSI only)
+   * ADC Clock PCLK2/6 = 10.66 MHz (design says 14 MHz max, /4 would be 16 MHz)
+   * APB2 Prescaler 1 = HCLK = 64 Mhz (PCLK2)
+   * APB1 Clock = HCLK / 2 (Max. 36 MHz by design -> 32 MHz) (PCLK1)
+   * AHB Clock = SYSCLK = 64 MHz
+	 */
+  RCC->CFGR = RCC_CFGR_PLLMULL16 | RCC_CFGR_ADCPRE_DIV6 | RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_HPRE_DIV1;
+  __RCC_PLL_ENABLE();
+  while(!(RCC->CR & RCC_CR_PLLRDY)) {
+    /* wait for PLL to be locked. Library code has a timeout check here which ends up in the error handler that implements an
+    endless loop, so we can also just stay here. */
   }
+  /* 2 wait states need to be configured for flash memory, because we will run at > 48 MHz */
+  /* Flash latency init is 0, so no reset neccessary */
+  FLASH->ACR |= FLASH_ACR_LATENCY_1;  /* register naming ambiguous here: This sets Bit 1 which is 2 wait states */
+  /* switch clock source to PLL */
+  RCC->CFGR |= RCC_CFGR_SW_PLL;
 
-    /**Initializes the CPU, AHB and APB busses clocks 
-    */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
-
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
-  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV6;
-  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+  /* I wonder if the SystemCoreClock variable should be set as well - HAL doesn't seem to do that either?! */
 
     /**Configure the Systick interrupt time 
     */
-  HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq()/1000);
+  HAL_SYSTICK_Config(64000000/1000);
 
     /**Configure the Systick 
     */
