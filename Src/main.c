@@ -1085,18 +1085,14 @@ void SystemClock_Config(void)
   /* switch clock source to PLL */
   RCC->CFGR |= RCC_CFGR_SW_PLL;
 
-  /* I wonder if the SystemCoreClock variable should be set as well - HAL doesn't seem to do that either?! */
+  /* System now running with 64 MHz */
+  SystemCoreClock = 64000000;
 
-    /**Configure the Systick interrupt time 
-    */
-  HAL_SYSTICK_Config(64000000/1000);
 
-    /**Configure the Systick 
-    */
+  /**Configure the Systick 
+  */
   HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
-
-  /* SysTick_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+  HAL_InitTick (TICK_INT_PRIORITY);
 }
 
 
