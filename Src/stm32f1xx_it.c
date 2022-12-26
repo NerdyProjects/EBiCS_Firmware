@@ -236,13 +236,9 @@ void EXTI9_5_IRQHandler(void)
 */
 void DMA1_Channel1_IRQHandler(void)
 {
-  /* USER CODE BEGIN DMA1_Channel1_IRQn 0 */
-
-  /* USER CODE END DMA1_Channel1_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_adc1);
-  /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
-
-  /* USER CODE END DMA1_Channel1_IRQn 1 */
+  /* notify main application about new ADC data in memory
+    as this interrupt notifies about DMA transfer complete. */
+  ui8_adc_regular_flag = 1;
 }
 
 /**
@@ -278,14 +274,12 @@ void DMA1_Channel5_IRQHandler(void)
 */
 void ADC1_2_IRQHandler(void)
 {
-  /* USER CODE BEGIN ADC1_2_IRQn 0 */
-
-  /* USER CODE END ADC1_2_IRQn 0 */
-  HAL_ADC_IRQHandler(&hadc1);
-  HAL_ADC_IRQHandler(&hadc2);
-  /* USER CODE BEGIN ADC1_2_IRQn 1 */
-  //HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_2);
-  /* USER CODE END ADC1_2_IRQn 1 */
+  if (ADC1->SR & (1 << ADC_SR_JEOS)) {
+    /* clear injected start & end flags */
+    ADC1->SR &= ~((1 << ADC_SR_JEOS_Pos) | (1 << ADC_SR_JSTRT_Pos));
+    phase_current_measurement_complete();
+  }
+  
 }
 
 /**

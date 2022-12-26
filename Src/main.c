@@ -256,8 +256,7 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_TIM1_Init(void);
-static void MX_ADC1_Init(void);
-static void MX_ADC2_Init(void);
+static void ADC_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 int16_t T_NTC(uint16_t ADC);
@@ -378,31 +377,10 @@ int main(void)
   EE_Init();
   HAL_FLASH_Lock();
 
-  MX_ADC1_Init();
-  /* Run the ADC calibration */
-  if (HAL_ADCEx_Calibration_Start(&hadc1) != HAL_OK)
-  {
-    /* Calibration Error */
-    Error_Handler();
-  }
-  MX_ADC2_Init();
-  /* Run the ADC calibration */
-  if (HAL_ADCEx_Calibration_Start(&hadc2) != HAL_OK)
-  {
-    /* Calibration Error */
-    Error_Handler();
-  }
+  ADC_Init();
 
   /* USER CODE BEGIN 2 */
- SET_BIT(ADC1->CR2, ADC_CR2_JEXTTRIG);//external trigger enable
- __HAL_ADC_ENABLE_IT(&hadc1,ADC_IT_JEOC);
- SET_BIT(ADC2->CR2, ADC_CR2_JEXTTRIG);//external trigger enable
- __HAL_ADC_ENABLE_IT(&hadc2,ADC_IT_JEOC);
 
-
-  //HAL_ADC_Start_IT(&hadc1);
-  HAL_ADCEx_MultiModeStart_DMA(&hadc1, (uint32_t*)adcData, 7);
-  HAL_ADC_Start_IT(&hadc2);
   MX_TIM1_Init(); //Hier die Reihenfolge getauscht!
   MX_TIM2_Init();
   MX_TIM3_Init();
@@ -1096,161 +1074,128 @@ void SystemClock_Config(void)
 }
 
 
-/* ADC1 init function */
-static void MX_ADC1_Init(void)
+/* ADC init function:
+  Configures both ADCs and the corresponding DMA1CH1. Enables all peripherals as well. */
+static void ADC_Init(void)
 {
+  /* Enable ADC clocks */
+  RCC->APB2ENR |= (1 << RCC_APB2ENR_ADC1EN_Pos) | (1 << RCC_APB2ENR_ADC2EN_Pos);
+  RCC->AHBENR |= (1 << RCC_AHBENR_DMA1EN_Pos);
+  /* A 2-clock cycle delay should be added here before ADC registers can be accessed. (1 clock cycle delay
+    by write to RCC register above already done) */
+  __NOP();  
 
-  ADC_MultiModeTypeDef multimode;
-  ADC_InjectionConfTypeDef sConfigInjected;
-  ADC_ChannelConfTypeDef sConfig;
+  /* No analog watchdog (ToDo!)
+   Dual mode: Simultaneous for regular + injected, that means a trigger to ADC1 starts ADC2 as well. Matching sampling-times has to be specified
+   for each configured channel pair that will be converted at the same time. Also, DMA has to be enabled; external triggers have to be enabled for
+   both ADC1 + 2, but 2 should not be configured to the same trigger source.
+   ToDo: If there is any use, ADC2 can be used for some regular conversions as well.
+   No discontinuous mode
+   no automatic injected group
+   Scan mode: All regular channels in a group are converted
+   Interrupt for injected channels (ToDo: Configure)
+   No interrupt on EOC (DMA)
+   Enable temperature/Vref (for future temperature sensor readout)
+   Enable external trigger for regular channels on Timer 3 TRGO (ToDo: Maybe use continuous mode?)
+   Enable external trigger for injected channels on Timer 1 CC4
+   DataAlign right
+   No continuous mode: Conversions need to be triggered
+   ADC on
+   */
+  ADC1->CR1 = (1 << ADC_CR1_DUALMOD_Pos) | (1 << ADC_CR1_SCAN_Pos) | (1 << ADC_CR1_JEOSIE_Pos);
+  ADC1->CR2 = (1 << ADC_CR2_TSVREFE_Pos) | (1 << ADC_CR2_EXTTRIG_Pos) | (4 << ADC_CR2_EXTSEL_Pos) | 
+              (1 << ADC_CR2_JEXTTRIG_Pos) | (1 << ADC_CR2_JEXTSEL_Pos) | (0 << ADC_CR2_ALIGN_Pos) |
+              (1 << ADC_CR2_DMA_Pos) | (1 << ADC_CR2_ADON_Pos);
 
-    /**Common config 
-    */
-  hadc1.Instance = ADC1;
-  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE; //Scan muÃ fÃ¼r getriggerte Wandlung gesetzt sein
-  hadc1.Init.ContinuousConvMode = DISABLE;
-  hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T3_TRGO;// Trigger regular ADC with timer 3 ADC_EXTERNALTRIGCONV_T1_CC1;// // ADC_SOFTWARE_START; //
-  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 7;
-  hadc1.Init.NbrOfDiscConversion = 0;
+  /* ADC2: Subset of ADC1 configuration:
+   Scan mode, Software Start Trigger, 1 injected channel.
+   Interrupt not necessary, as ADC1 interrupt will notify about the data.
+   Trigger injected conversion on external trigger SWSTART
+   */
+  ADC2->CR1 = (1 << ADC_CR1_SCAN_Pos) | (0 << ADC_CR1_JEOSIE_Pos);
+  ADC2->CR2 = (1 << ADC_CR2_JEXTTRIG_Pos) | (7 << ADC_CR2_JEXTSEL_Pos) | (1 << ADC_CR2_ADON_Pos);
 
 
-  if (HAL_ADC_Init(&hadc1) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-    /**Configure the ADC multi-mode 
-    */
-  multimode.Mode = ADC_DUALMODE_REGSIMULT_INJECSIMULT;
-  if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-    /**Configure Injected Channel 
-    */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_4;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_1;
-  sConfigInjected.InjectedNbrOfConversion = 1;
-  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-  sConfigInjected.ExternalTrigInjecConv = ADC_EXTERNALTRIGINJECCONV_T1_CC4; // Hier bin ich nicht sicher ob Trigger out oder direkt CC4
-  sConfigInjected.AutoInjectedConv = DISABLE; //muÃ aus sein
-  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;
-  sConfigInjected.InjectedOffset = ui16_ph1_offset;//1900;
-  HAL_ADC_Stop(&hadc1); //ADC muÃ gestoppt sein, damit Triggerquelle gesetzt werden kann.
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &sConfigInjected) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-  /**Configure Regular Channel
+  /* Configure Sample time registers:
+   everything with 1.5 cycles = 140 ns
+   Temperature sensor with 239.5 cycles = 22.4 µs
+   ToDo: Maybe slightly higher sampling times for channels 7/3/8/9 ? I don't know about the external capacity on those pins.
   */
-sConfig.Channel = ADC_CHANNEL_7; //battery voltage
-sConfig.Rank = ADC_REGULAR_RANK_1;
-sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;//ADC_SAMPLETIME_239CYCLES_5;
-if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-{
-  _Error_Handler(__FILE__, __LINE__);
+  ADC1->SMPR1 = (111 << ADC_SMPR1_SMP16_Pos);
+  ADC1->SMPR2 = 0;
+
+  ADC2->SMPR1 = 0;
+  ADC2->SMPR2 = 0;
+
+    /* ADC Channel definition:
+    7: Battery Voltage
+    3: SP Throttle
+    4: Phase current 1
+    5: Phase current 2
+    6: Phase current 3
+    8: AD2 / Temperature
+    9: Temperature or Torque on PhoebeLiu @ aliexpress
+    16: STM32 temperature sensor - must be sampled with 17.1 µs and might have very high chip-to-chip offset variations (datasheet says 45K)
+  */
+
+ /**Configure Regular Channel
+   * L = 7 for 8 conversions.
+  */
+  ADC1->SQR3 = (7 << ADC_SQR3_SQ1_Pos) |
+              (3 << ADC_SQR3_SQ2_Pos) |
+              (4 << ADC_SQR3_SQ3_Pos) |
+              (5 << ADC_SQR3_SQ4_Pos) |
+              (6 << ADC_SQR3_SQ5_Pos) |
+              (8 << ADC_SQR3_SQ6_Pos);
+  ADC1->SQR2 = (9 << ADC_SQR2_SQ7_Pos) |
+              (16 << ADC_SQR2_SQ8_Pos);
+  ADC1->SQR1 = (7 << ADC_SQR1_L_Pos);
+
+  /* Configure ADC1 injected Channel 4 (Phase 1 current):
+     - Sequence Length = 1 (JL=0)
+     - JSQ4 = 4 (first/only sequence converted )
+     Injected channels will be dynamically selected by the calculated PWM duty cycle later.
+  */
+  ADC1->JSQR = (4 << ADC_JSQR_JSQ4_Pos);
+  /* Set offset to be substracted */
+  ADC1->JOFR1 = ui16_ph1_offset;
+
+  /* Configure ADC2 injected channel 5 (Phase 2 current):
+     - Sequence length = 1 (JL=0)
+     - JSQ4 = 4 (first/only sequence converted) 
+     Injected channels will be dynamically selected by the calculated PWM duty cycle later.
+  */
+  ADC2->JSQR = (5 << ADC_JSQR_JSQ4_Pos);
+  /* Set offset to be substracted */
+  ADC2->JOFR1 = ui16_ph1_offset;
+
+  ADC1->CR2 |= (1 << ADC_CR2_RSTCAL_Pos);
+  ADC2->CR2 |= (1 << ADC_CR2_RSTCAL_Pos);
+  HAL_Delay(1);
+
+  /* perform ADC calibration */
+  ADC1->CR2 |= (1 << ADC_CR2_CAL_Pos);
+  ADC2->CR2 |= (1 << ADC_CR2_CAL_Pos);
+  HAL_Delay(1);
+
+  /* Configure DMA for ADC1 (DMA1, Channel 1)
+     Transfer 16 bit Periph to 16 bit memory
+     Memory circular buffer
+     interrupt on transfer completion*/
+  DMA1_Channel1->CCR = (1 << DMA_CCR_MSIZE_Pos) | (1 << DMA_CCR_PSIZE_Pos) | (1 << DMA_CCR_MINC_Pos) |
+                      (1 << DMA_CCR_CIRC_Pos) | (1 << DMA_CCR_TCIE_Pos);
+  DMA1_Channel1->CNDTR = 8;
+  DMA1_Channel1->CPAR = (uint32_t)&(ADC1->DR);
+  DMA1_Channel1->CMAR = (uint32_t)adcData;
+
+  /* Enable ADC DMA Channel*/
+  DMA1_Channel1->CCR |= (1 << DMA_CCR_EN_Pos);
+  
+  HAL_NVIC_SetPriority(ADC1_2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(ADC1_2_IRQn);
 }
 
 
-/**Configure Regular Channel
-*/
-sConfig.Channel = ADC_CHANNEL_3; //Connector SP: throttle input
-sConfig.Rank = ADC_REGULAR_RANK_2;
-sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;//ADC_SAMPLETIME_239CYCLES_5;
-if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-{
-_Error_Handler(__FILE__, __LINE__);
-}
-/**Configure Regular Channel
-*/
-sConfig.Channel = ADC_CHANNEL_4; //Phase current 1
-sConfig.Rank = ADC_REGULAR_RANK_3;
-sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;//ADC_SAMPLETIME_239CYCLES_5;
-if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-{
-_Error_Handler(__FILE__, __LINE__);
-}
-/**Configure Regular Channel
-*/
-sConfig.Channel = ADC_CHANNEL_5; //Phase current 2
-sConfig.Rank = ADC_REGULAR_RANK_4;
-sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;//ADC_SAMPLETIME_239CYCLES_5;
-if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-{
-_Error_Handler(__FILE__, __LINE__);
-}
-/**Configure Regular Channel
-*/
-sConfig.Channel = ADC_CHANNEL_6; //Phase current 3
-sConfig.Rank = ADC_REGULAR_RANK_5;
-sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;//ADC_SAMPLETIME_239CYCLES_5;
-if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-{
-_Error_Handler(__FILE__, __LINE__);
-}
-
-/**Configure Regular Channel
-*/
-sConfig.Channel = ADC_CHANNEL_8;
-sConfig.Rank = ADC_REGULAR_RANK_6; // connector AD2
-sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;//ADC_SAMPLETIME_239CYCLES_5;
-if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-{
-_Error_Handler(__FILE__, __LINE__);
-}
-
-/**Configure Regular Channel
-*/
-sConfig.Channel = ADC_CHANNEL_9; // connector AD1, temperature or torque input for Controller from PhoebeLiu @ aliexpress
-sConfig.Rank = ADC_REGULAR_RANK_7;
-sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;//ADC_SAMPLETIME_239CYCLES_5;
-if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
-{
-_Error_Handler(__FILE__, __LINE__);
-}
-
-}
-
-/* ADC2 init function */
-static void MX_ADC2_Init(void)
-{
-
-  ADC_InjectionConfTypeDef sConfigInjected;
-
-    /**Common config 
-    */
-  hadc2.Instance = ADC2;
-  hadc2.Init.ScanConvMode = ADC_SCAN_ENABLE; //hier auch Scan enable?!
-  hadc2.Init.ContinuousConvMode = DISABLE;
-  hadc2.Init.DiscontinuousConvMode = DISABLE;
-  hadc2.Init.ExternalTrigConv = ADC_SOFTWARE_START;
-  hadc2.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc2.Init.NbrOfConversion = 1;
-  if (HAL_ADC_Init(&hadc2) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-    /**Configure Injected Channel 
-    */
-  sConfigInjected.InjectedChannel = ADC_CHANNEL_5;
-  sConfigInjected.InjectedRank = ADC_INJECTED_RANK_1;
-  sConfigInjected.InjectedNbrOfConversion = 1;
-  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_1CYCLE_5;
-  sConfigInjected.ExternalTrigInjecConv = ADC_INJECTED_SOFTWARE_START;
-  sConfigInjected.AutoInjectedConv = DISABLE;
-  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;
-  sConfigInjected.InjectedOffset = ui16_ph2_offset;//	1860;
-  if (HAL_ADCEx_InjectedConfigChannel(&hadc2, &sConfigInjected) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-}
 /* TIM1 init function */
 static void MX_TIM1_Init(void)
 {
@@ -1509,6 +1454,7 @@ static void MX_GPIO_Init(void)
 {
 
   GPIO_InitTypeDef GPIO_InitStruct;
+  
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -1516,6 +1462,14 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+
+  GPIO_InitStruct.Pin = Throttle_Pin|Phase_Current1_Pin|Phase_Current_2_Pin|Phase_Current_3_Pin|GPIO_PIN_7; //128 for PA7 = AIN7
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin =  Temperature_Pin|GPIO_PIN_0|GPIO_PIN_1; //for ADC8+9
+    GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pins : Hall_1_Pin Hall_2_Pin Hall_3_Pin */
   GPIO_InitStruct.Pin = Hall_1_Pin|Hall_2_Pin|Hall_3_Pin;
@@ -1587,16 +1541,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 }
 
 
-
-// regular ADC callback
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
-{
-	ui8_adc_regular_flag=1;
-}
-
-//injected ADC
-
-void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef* hadc)
+/* Called from interrupt handler to signal the completion of the injected ADC measurements:
+  Phase currents (of previously configured channels: 2 out of 3)*/
+void phase_current_measurement_complete()
 {
 	//for oszi-check of used time in FOC procedere
 	//HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
@@ -1609,17 +1556,19 @@ void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef* hadc)
 
 	if(!ui8_adc_offset_done_flag)
 	{
-	i16_ph1_current = HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
-	i16_ph2_current = HAL_ADCEx_InjectedGetValue(&hadc2, ADC_INJECTED_RANK_1);
+    /* ToDo: While the offsets are not calculated, we should not use any data.
+       Actually, the main application does not run anyway - likely we also don't need this here at all? */
+    i16_ph1_current = ADC1->JDR1;
+    i16_ph2_current = ADC2->JDR1;
 
-	ui8_adc_inj_flag=1;
+  	ui8_adc_inj_flag=1;
 	}
 	else{
 
 #ifdef DISABLE_DYNAMIC_ADC
 
-		i16_ph1_current = HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
-		i16_ph2_current = HAL_ADCEx_InjectedGetValue(&hadc2, ADC_INJECTED_RANK_1);
+    i16_ph1_current = ADC1->JDR1;
+    i16_ph2_current = ADC2->JDR1;
 
 
 #else
@@ -1627,29 +1576,29 @@ void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef* hadc)
 		{
 		case 1: //Phase C at high dutycycles, read from A+B directly
 			{
-				temp1=(q31_t)HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
+				temp1=(q31_t)ADC1->JDR1;
 				i16_ph1_current = temp1 ;
 
-				temp2=(q31_t)HAL_ADCEx_InjectedGetValue(&hadc2, ADC_INJECTED_RANK_1);
+				temp2=(q31_t)ADC2->JDR1;
 				i16_ph2_current = temp2;
 			}
 			break;
 		case 2: //Phase A at high dutycycles, read from B+C (A = -B -C)
 			{
 
-				temp2=(q31_t)HAL_ADCEx_InjectedGetValue(&hadc2, ADC_INJECTED_RANK_1);
+				temp2=(q31_t)ADC2->JDR1;
 				i16_ph2_current = temp2;
 
-				temp1=(q31_t)HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
+				temp1=(q31_t)ADC1->JDR1;
 				i16_ph1_current = -i16_ph2_current-temp1;
 
 			}
 			break;
 		case 3: //Phase B at high dutycycles, read from A+C (B=-A-C)
 			{
-				temp1=(q31_t)HAL_ADCEx_InjectedGetValue(&hadc1, ADC_INJECTED_RANK_1);
+				temp1=(q31_t)ADC1->JDR1;
 				i16_ph1_current = temp1 ;
-				temp2=(q31_t)HAL_ADCEx_InjectedGetValue(&hadc2, ADC_INJECTED_RANK_1);
+				temp2=(q31_t)ADC2->JDR1;
 				i16_ph2_current = -i16_ph1_current-temp2;
 			}
 			break;
@@ -1659,10 +1608,6 @@ void HAL_ADCEx_InjectedConvCpltCallback(ADC_HandleTypeDef* hadc)
 				//do nothing
 			}
 			break;
-
-
-
-
 		} // end case
 #endif
 
