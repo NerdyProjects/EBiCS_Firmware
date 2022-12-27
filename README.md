@@ -27,3 +27,17 @@ This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
+
+## Building instructions
+You need a `arm-none-eabi` toolchain consisting of GCC, Binutils and newlib.
+
+Use `make` to build the project with the `Makefile` in the root folder.
+The files `EBiCS_Firmware.{elf,hex,bin}` in the `build` contain the compiled firmware.
+
+By default, the files are compiled to be used with a bootloader on the device.
+
+### Lishui Bootloader
+To generate a `.lsh` file, install `srec_cat` (likely in the package `srecord` on your distribution) and run:
+`java make/hexToLsh.java` from the main folder. This converts the build firmware from the `build` folder into
+`output/EBiCS_Firmware.lsh` which can be uploaded via the lishui flash tool (via the display connector / serial
+connection to the controller)
