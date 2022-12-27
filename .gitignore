@@ -12,6 +12,7 @@ main.hex
 *.rel
 *.rst
 *.sym
+output/
 
 Debug
 /JavaConfigurator/nbproject/private/
