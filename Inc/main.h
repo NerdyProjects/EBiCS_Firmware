@@ -108,6 +108,8 @@ int32_t map (int32_t x, int32_t in_min, int32_t in_max, int32_t out_min, int32_t
 void autodetect();
 void runPIcontrol();
 void phase_current_measurement_complete();
+void timer3_elapsed();
+void hall_event(void);
 
 extern uint16_t switchtime[3];
 extern uint32_t ui32_tim1_counter;

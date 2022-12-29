@@ -255,13 +255,9 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
-static void MX_TIM1_Init(void);
+static void TIMER_Init(void);
 static void ADC_Init(void);
-static void MX_TIM2_Init(void);
-static void MX_TIM3_Init(void);
 int16_t T_NTC(uint16_t ADC);
-
-void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
                                 
 
 /* USER CODE BEGIN PFP */
@@ -380,47 +376,19 @@ int main(void)
   ADC_Init();
 
   /* USER CODE BEGIN 2 */
+  TIMER_Init();
 
-  MX_TIM1_Init(); //Hier die Reihenfolge getauscht!
-  MX_TIM2_Init();
-  MX_TIM3_Init();
-
- // Start Timer 1
-    if(HAL_TIM_Base_Start_IT(&htim1) != HAL_OK)
-      {
-        /* Counter Enable Error */
-        Error_Handler();
-      }
-
-      HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-      HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_1); // turn on complementary channel
-      HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-      HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_2);
-      HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
-      HAL_TIMEx_PWMN_Start(&htim1, TIM_CHANNEL_3);
-
-      HAL_TIM_PWM_Start_IT(&htim1, TIM_CHANNEL_4);
-
-
-
-
-    TIM1->CCR4 = TRIGGER_DEFAULT; //ADC sampling just before timer overflow (just before middle of PWM-Cycle)
+    
 //PWM Mode 1: Interrupt at counting down.
 
     //TIM1->BDTR |= 1L<<15;
    // TIM1->BDTR &= ~(1L<<15); //reset MOE (Main Output Enable) bit to disable PWM output
     // Start Timer 2
-    HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
+    // HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);
     //HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);
     //HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_3);
 
        // Start Timer 3
-
-       if(HAL_TIM_Base_Start_IT(&htim3) != HAL_OK)
-            {
-              /* Counter Enable Error */
-              Error_Handler();
-            }
 
 
 #if (DISPLAY_TYPE & DISPLAY_TYPE_KINGMETER)
@@ -1195,200 +1163,103 @@ static void ADC_Init(void)
   HAL_NVIC_EnableIRQ(ADC1_2_IRQn);
 }
 
-
-/* TIM1 init function */
-static void MX_TIM1_Init(void)
+/* Configures Timer1-3:
+  Timer 1 - Motor PWM, 64 MHz base clock, Up/Down counting PWM at around 15.8 kHz
+  Timer 2 - HALL sensor readings via input capture interrupt, internal speed sensor generation
+  Timer 3 - regular ADC trigger, slow loop timing control
+  */
+static void TIMER_Init(void)
 {
+  /* Enable clock to timer modules */
+  RCC->APB2ENR |= (1 << RCC_APB2ENR_TIM1EN_Pos);
+  RCC->APB1ENR |= (1 << RCC_APB1ENR_TIM2EN_Pos) | (1 << RCC_APB1ENR_TIM3EN_Pos);
 
-  TIM_ClockConfigTypeDef sClockSourceConfig;
-  TIM_MasterConfigTypeDef sMasterConfig;
-  TIM_OC_InitTypeDef sConfigOC;
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig;
+  /* Center aligned mode 1: OC Interrupt when downcounting */
+  TIM1->CR1 = (1 << TIM_CR1_CMS_Pos);
+  /* ToDo: CCPC/CCUS
+    Output Idle state = 0 for P and =1 for N channels
+    Output Idle state = 1 for P of channel 4 (ADC trigger)
+    Master Mode: OC4REF triggers slaves (TRGO) */
+  TIM1->CR2 = (1 << TIM_CR2_OIS1N_Pos) | (1 << TIM_CR2_OIS2N_Pos) | (1 << TIM_CR2_OIS3N_Pos) |
+            (1 << TIM_CR2_OIS4_Pos) | (7 << TIM_CR2_MMS_Pos);
+  /*
+  Preload for compare register enabled (-> update events could come at top and bottom I guess, but shouldn't matter too much)
+  PWM Mode 1: Output active below compare register (Duty-cycle 100% at compare-register=period)
 
-  htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_CENTERALIGNED1;
-  htim1.Init.Period = _T;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+  */
+  TIM1->CCMR1 = (1 << TIM_CCMR1_OC1PE_Pos) | (6 << TIM_CCMR1_OC1M_Pos) |
+              (1 << TIM_CCMR1_OC2PE_Pos) | (6 << TIM_CCMR1_OC2M_Pos);
+  TIM1->CCMR2 = (1 << TIM_CCMR2_OC3PE_Pos) | (6 << TIM_CCMR2_OC3M_Pos) |
+              (1 << TIM_CCMR2_OC4PE_Pos) | (6 << TIM_CCMR2_OC4M_Pos);
 
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+  /* Output Compares active high (P-Ch); active low (N-Ch)
+    Interrupt/ADC trigger channel (P) active low
+  */
+  TIM1->CCER = (1 << TIM_CCER_CC1E_Pos) | (1 << TIM_CCER_CC1NE_Pos) | (1 << TIM_CCER_CC1NP_Pos) |
+              (1 << TIM_CCER_CC2E_Pos) | (1 << TIM_CCER_CC2NE_Pos) | (1 << TIM_CCER_CC2NP_Pos) |
+              (1 << TIM_CCER_CC3E_Pos) | (1 << TIM_CCER_CC3NE_Pos) | (1 << TIM_CCER_CC3NP_Pos) |
+              (1 << TIM_CCER_CC4E_Pos) | (1 << TIM_CCER_CC4P_Pos);
 
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+  /* set timer period. Resulting PWM frequency is 64 MHz / (ARR + 1) / 2 (center aligned/up&down counting).
+    PWM dutycycle 0% (Compare = 0) to 100% (Compare >= _T = 2028) */
+  TIM1->ARR = _T;
 
-  if (HAL_TIM_OC_Init(&htim1) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+  /* Set initial PWM duty cycles.
+   */
+  TIM1->CCR1 = _T/2;
+  TIM1->CCR2 = _T/2;
+  TIM1->CCR3 = _T/2;
+  TIM1->CCR4 = TRIGGER_DEFAULT; //ADC sampling just before timer overflow (just before middle of PWM-Cycle)
 
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_OC4REF;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+  /* Deadtime 32 (timer cycles) e.g. 500ns, Compare outputs disable in idle (e.g. GPIO takes over)
+   ToDo: There is external gate drivers with deadtime generation, so these deadtimes add up.
+   (IRS2003: about 500ns, turn on delay 680-820ns; turn off delay 150-220ns)
+   Mosfets have about 30-60ns delay turn on and 30-80ns turn off, so a (total) deadtime of 100ns should be quite safe.
+   Deadtime should be considered when defining sample points for the phase current measurements. */
+  TIM1->BDTR = (32 << TIM_BDTR_DTG_Pos);
 
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 1;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_LOW;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_SET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+  /* There are no interrupts of Timer 1 in use, so leave them disabled */
 
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
 
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+/* Timer 2 */
+  TIM2->CR1 = 0;
+  /* TI1 Input XOR of CH1/CH2/CH3*/
+  TIM2->CR2 = (1 << TIM_CR2_TI1S_Pos);
+  /* Slave mode: Reset, Trigger by TI1 Edge detector */
+  TIM2->SMCR = (4 << TIM_SMCR_TS_Pos) | (4 << TIM_SMCR_SMS_Pos);
+  /* Interrupt on trigger (which is any of the Hall sensor state changes) */
+  TIM2->DIER = (1 << TIM_DIER_TIE_Pos);
+  /* ToDo: Original filter sets the filter register to 8 which does sampling at
+     fdts/8 with a filter length of 6, effectively creating a filter delay of
+     1,5 µs*/
+  /* Enable input capture on Channel 1 (=TRC) with 8 cycle filter */
+  /* ToDo: Original code sets channel 2 and 3 as well, which we don't need */
+  TIM2->CCMR1 = (3 << TIM_CCMR1_CC1S_Pos) | (7 << TIM_CCMR1_IC1F_Pos);
+  TIM2->CCER = (1 << TIM_CCER_CC1E_Pos);
+  /* ToDo: ST code uses dynamic prescaler */
+  TIM2->PSC = 128;
+  HAL_NVIC_SetPriority(TIM2_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(TIM2_IRQn);
 
-  //sConfigOC.OCMode = TIM_OCMODE_ACTIVE; // war hier ein Bock?!
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_LOW;
-  if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
 
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 32;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
+/* Timer 3:Upcounting (0..ARR) */
 
-  HAL_TIM_MspPostInit(&htim1);
+  TIM3->CR1 = 0;
+  /* TRGO on CNT = OC1. (Triggers ADC1 regular conversion)
+   Does not need to be enabled further, OC1 = 0, so basically trigger on overflow. */
+  TIM3->CR2 = (3 << TIM_CR2_MMS_Pos);
+  TIM3->ARR = 7813;
+  TIM3->DIER = (1 << TIM_DIER_UIE_Pos);
 
-}
+  HAL_NVIC_SetPriority(TIM3_IRQn, 1, 0);
+  HAL_NVIC_EnableIRQ(TIM3_IRQn);
 
-/* TIM2 init function */
-static void MX_TIM2_Init(void)
-{
-	  TIM_ClockConfigTypeDef sClockSourceConfig;
-	  TIM_SlaveConfigTypeDef sSlaveConfig;
-	  TIM_MasterConfigTypeDef sMasterConfig;
-	  TIM_IC_InitTypeDef sConfigIC;
 
-	  htim2.Instance = TIM2;
-	  htim2.Init.Prescaler = 128;
-	  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-	  htim2.Init.Period = 65535;
-	  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-	  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-	  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  if (HAL_TIM_IC_Init(&htim2) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  sSlaveConfig.SlaveMode = TIM_SLAVEMODE_RESET;
-	  sSlaveConfig.InputTrigger = TIM_TS_TI1F_ED;
-	  sSlaveConfig.TriggerFilter = 8;
-	  if (HAL_TIM_SlaveConfigSynchronization(&htim2, &sSlaveConfig) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-	  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-	  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
-	  sConfigIC.ICSelection = TIM_ICSELECTION_TRC;
-	  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
-	  sConfigIC.ICFilter = 8;
-	  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
-	  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_3) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-	  if (HAL_TIM_ConfigTI1Input(&htim2, TIM_TI1SELECTION_XORCOMBINATION) != HAL_OK)
-	  {
-	    _Error_Handler(__FILE__, __LINE__);
-	  }
-
-}
-
-/* TIM3 init function 8kHz interrupt frequency for regular adc triggering */
-static void MX_TIM3_Init(void)
-{
-
-  TIM_ClockConfigTypeDef sClockSourceConfig;
-  TIM_MasterConfigTypeDef sMasterConfig;
-
-  htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 7813;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_OC1;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
-  {
-    _Error_Handler(__FILE__, __LINE__);
-  }
-
-  HAL_TIM_MspPostInit(&htim3);
+  /* Enable Timers */
+  TIM1->CR1 |= (1 << TIM_CR1_CEN_Pos);
+  TIM1->BDTR |= (1 << TIM_BDTR_MOE_Pos);
+  TIM2->CR1 |= (1 << TIM_CR1_CEN_Pos);
+  TIM3->CR1 |= (1 << TIM_CR1_CEN_Pos);
 
 }
 
@@ -1516,13 +1387,23 @@ static void MX_GPIO_Init(void)
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
+/* Timer 1 PWM Pins (FET drive) */
+      GPIO_InitStruct.Pin = GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_10;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
 }
 
 /* USER CODE BEGIN 4 */
 
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+void timer3_elapsed(void)
 {
-	if (htim == &htim3) {
 
 #ifdef SPEED_PLL
 		   if(!READ_BIT(TIM1->BDTR, TIM_BDTR_MOE))q31_rotorposition_PLL += (q31_angle_per_tic<<1);
@@ -1537,7 +1418,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		if(uint16_full_rotation_counter<8000)uint16_full_rotation_counter++;	//full rotation counter for motor standstill detection
 		if(uint16_half_rotation_counter<8000)uint16_half_rotation_counter++;	//half rotation counter for motor standstill detection
 
-	}
 }
 
 
@@ -1681,7 +1561,7 @@ void phase_current_measurement_complete()
 
 }
 
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef* htim)
+void hall_event(void)
 {
 	 //__HAL_TIM_SET_COUNTER(&htim2,0); //reset tim2 counter
 
